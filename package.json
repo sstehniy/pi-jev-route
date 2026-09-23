@@ -1,0 +1,34 @@
+{
+  "name": "pi-jev-route",
+  "version": "0.1.0",
+  "description": "Route mid-run Pi prompts to steering or follow-up with TypeSafe Jev.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sstehniy/pi-jev-route.git"
+  },
+  "homepage": "https://github.com/sstehniy/pi-jev-route#readme",
+  "keywords": ["pi-package", "pi-extension", "jev", "typesafe", "steering"],
+  "files": ["extensions/", "README.md", "LICENSE"],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/router.ts"
+    ]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2",
+    "@earendil-works/pi-tui": ">=0.84.2"
+  }
+}

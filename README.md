@@ -8,9 +8,9 @@ Routes mid-run prompts in [Pi](https://github.com/earendil-works/pi) with TypeSa
 pi install npm:pi-jev-route
 ```
 
-Run `/jev-login` in Pi and enter your TypeSafe API key in the masked prompt. On macOS, the key goes into Keychain. If Keychain is unavailable, Pi asks before saving it to a private file instead. On Linux and Windows, it saves to `<agent-dir>/pi-jev-route.key` (normally `~/.pi/agent/pi-jev-route.key`). Keep your agent directory private, especially if you changed `PI_CODING_AGENT_DIR`. Run `/jev-login` again to replace the key.
+Run `/jev-login` in Pi and enter your TypeSafe API key in the masked prompt. On macOS, the key goes into Keychain. If Keychain is unavailable, Pi asks before saving it to a private file instead. On Linux and Windows, it saves to `<agent-dir>/pi-jev-route.key` (normally `~/.pi/agent/pi-jev-route.key`). The file is restricted to your account. Run `/jev-login` again to replace the key.
 
-For non-interactive use, set `TYPESAFE_API_KEY` in the process environment instead. You do not need a `.env` file or a shell startup-file edit.
+For non-interactive use, set `TYPESAFE_API_KEY` in the process environment. An environment key takes priority over any saved key. You do not need a `.env` file or a shell startup-file edit.
 
 ## Behavior
 

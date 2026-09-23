@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,27 +140,27 @@ async function login(confirm = false) {
   });
 }
 
-test("/jev-login saves a masked key to Keychain via Swift stdin, never in arguments", async () => {
+test("/jev-login saves a masked key to Keychain without a controlling terminal", async () => {
   if (originalPlatform === "win32") return;
   process.platform = "darwin";
   setup();
   const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
-  const swift = join(dir, "swift");
+  const security = join(dir, "security");
   const file = join(dir, "captured");
   writeFileSync(
-    swift,
-    '#!/bin/sh\nprintf "%s\\n" "$@" > "$KEYCHAIN_PROBE"\ncat >> "$KEYCHAIN_PROBE"\n',
+    security,
+    '#!/bin/sh\nif (tty < /dev/tty) >/dev/null 2>&1; then exit 2; fi\nprintf "%s\\n" "$@" > "$KEYCHAIN_PROBE"\ncat >> "$KEYCHAIN_PROBE"\n',
   );
-  chmodSync(swift, 0o700);
+  chmodSync(security, 0o700);
   process.env.PATH = `${dir}:${originalPath}`;
   process.env.KEYCHAIN_PROBE = file;
   try {
     await login();
     const saved = readFileSync(file, "utf8");
     expect(saved.split("\n")[0]).not.toContain("dummy-private-key");
-    expect(saved).toContain("SecItemUpdate");
-    expect(saved).toContain("SecItemAdd");
-    expect(saved).toEndWith("dummy-private-key");
+    expect(saved).toContain("add-generic-password");
+    expect(saved).toContain("-w");
+    expect(saved).toEndWith("dummy-private-key\ndummy-private-key\n");
     expect(notified.at(-1)).toEqual(["TypeSafe key saved to Keychain", "info"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -172,7 +173,7 @@ test("saving to Keychain removes an earlier file so the new key takes effect", a
   delete process.env.TYPESAFE_API_KEY;
   setup();
   const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
-  writeFileSync(join(dir, "swift"), "#!/bin/sh\ncat > /dev/null\n", { mode: 0o700 });
+  writeFileSync(join(dir, "security"), "#!/bin/sh\ncat > /dev/null\n", { mode: 0o700 });
   writeFileSync(join(agentDir, "pi-jev-route.key"), "old-file-key", { mode: 0o600 });
   process.env.PATH = `${dir}:${originalPath}`;
   try {
@@ -192,7 +193,7 @@ test("/jev-login stores a private file on platforms without Keychain", async () 
   await login();
   const file = join(agentDir, "pi-jev-route.key");
   expect(readFileSync(file, "utf8")).toBe("dummy-private-key");
-  expect(statSync(file).mode & 0o077).toBe(0);
+  if (originalPlatform !== "win32") expect(statSync(file).mode & 0o077).toBe(0);
   expect(await input("Use passkeys")).toEqual({ action: "handled" });
   expect(authorization).toBe("Bearer dummy-private-key");
   await login();
@@ -206,7 +207,7 @@ test("Keychain failure needs consent before using a plaintext file", async () =>
   delete process.env.TYPESAFE_API_KEY;
   setup();
   const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
-  writeFileSync(join(dir, "swift"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  writeFileSync(join(dir, "security"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
   process.env.PATH = `${dir}:${originalPath}`;
   try {
     await login();
@@ -251,10 +252,48 @@ test("loads an existing macOS Keychain key when no file or environment key exist
   expect(authorization).toBe("Bearer keychain-test-key");
 });
 
-test("uses the environment key when Keychain has no key", async () => {
-  keychainCode = 44;
+test("an explicit environment key overrides saved file and Keychain keys", async () => {
+  writeFileSync(join(agentDir, "pi-jev-route.key"), "stale-file-key", { mode: 0o600 });
   expect(await setup()("Use passkeys")).toEqual({ action: "handled" });
   expect(authorization).toBe("Bearer test-key");
+  expect(keychainCalls).toHaveLength(0);
+});
+
+test("Windows stores the key with an owner-only, non-inherited ACL", async () => {
+  if (originalPlatform !== "win32") return;
+  setup();
+  await login();
+  const script = `
+$acl = Get-Acl -LiteralPath $env:PI_JEV_KEY_FILE
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$rules = @($acl.Access)
+if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { exit 1 }
+`;
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: { ...process.env, PI_JEV_KEY_FILE: join(agentDir, "pi-jev-route.key") },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  expect(result.status).toBe(0);
+  const file = join(agentDir, "pi-jev-route.key");
+  expect(readFileSync(file, "utf8")).toBe("dummy-private-key");
+  expect(notified.at(-1)?.[1]).toBe("info");
+
+  expect(spawnSync("icacls", [file, "/grant", "*S-1-1-0:R"], { stdio: "ignore" }).status).toBe(0);
+  delete process.env.TYPESAFE_API_KEY;
+  expect(await setup()("Use passkeys")).toEqual({ action: "handled" });
+  expect(authorization).toBe("Bearer dummy-private-key");
+  expect(
+    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      env: { ...process.env, PI_JEV_KEY_FILE: file },
+      stdio: "ignore",
+    }).status,
+  ).toBe(0);
 });
 
 test("keeps the original delivery when the key is missing", async () => {

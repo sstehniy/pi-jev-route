@@ -1,8 +1,8 @@
 import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Input, truncateToWidth } from "@earendil-works/pi-tui";
-import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -34,48 +34,62 @@ const question = choice(
 
 const keyFile = () => join(getAgentDir(), "pi-jev-route.key");
 
+function secureWindowsFile(path: string) {
+  const program = `
+$ErrorActionPreference = 'Stop'
+$path = $env:PI_JEV_KEY_FILE
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = Get-Acl -LiteralPath $path
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
+Set-Acl -LiteralPath $path -AclObject $acl
+$actual = Get-Acl -LiteralPath $path
+$rules = @($actual.Access)
+if (-not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].AccessControlType -ne 'Allow' -or
+    $rules[0].IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or
+    ($rules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne [System.Security.AccessControl.FileSystemRights]::FullControl) { exit 1 }
+`;
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", program],
+    {
+      env: { ...process.env, PI_JEV_KEY_FILE: path },
+      stdio: "ignore",
+      timeout: 10_000,
+    },
+  );
+  if (result.status !== 0) throw new Error("Could not restrict Windows key file access");
+}
+
 function saveFileKey(key: string) {
   mkdirSync(getAgentDir(), { recursive: true, mode: 0o700 });
   const temp = join(getAgentDir(), `.pi-jev-route-${randomUUID()}`);
   try {
-    writeFileSync(temp, key, { flag: "wx", mode: 0o600 });
+    writeFileSync(temp, "", { flag: "wx", mode: 0o600 });
+    if (process.platform === "win32") secureWindowsFile(temp);
+    writeFileSync(temp, key);
     renameSync(temp, keyFile());
+    if (process.platform === "win32") secureWindowsFile(keyFile());
   } finally {
     rmSync(temp, { force: true });
   }
 }
 
 function saveKeychainKey(key: string): Promise<void> {
-  const program = `
-import Foundation
-import Security
-let query: [String: Any] = [
-  kSecClass as String: kSecClassGenericPassword,
-  kSecAttrAccount as String: CommandLine.arguments[1],
-  kSecAttrService as String: "pi-jev-router"
-]
-let data = FileHandle.standardInput.readDataToEndOfFile()
-guard !data.isEmpty else { exit(1) }
-let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-if status == errSecItemNotFound {
-  var item = query
-  item[kSecValueData as String] = data
-  guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { exit(1) }
-} else if status != errSecSuccess {
-  exit(1)
-}
-`;
   return new Promise((resolve, reject) => {
-    const child = spawn("swift", ["-e", program, userInfo().username], {
-      stdio: ["pipe", "ignore", "ignore"],
-      signal: AbortSignal.timeout(30_000),
-    });
+    const child = spawn(
+      "security",
+      ["add-generic-password", "-U", "-a", userInfo().username, "-s", "pi-jev-router", "-w"],
+      { detached: true, stdio: ["pipe", "ignore", "ignore"], signal: AbortSignal.timeout(30_000) },
+    );
     child.once("error", reject);
     child.stdin.once("error", reject);
     child.once("close", (code) =>
       code === 0 ? resolve() : reject(new Error("Keychain save failed")),
     );
-    child.stdin.end(key);
+    child.stdin.end(`${key}\n${key}\n`);
   });
 }
 
@@ -198,11 +212,15 @@ export default function (pi: ExtensionAPI) {
       try {
         if (restoreIfStale()) return { action: "handled" as const };
         if (!client) {
-          let apiKey: string | undefined;
-          try {
-            apiKey = readFileSync(keyFile(), "utf8").trim();
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          let apiKey = process.env.TYPESAFE_API_KEY?.trim();
+          if (!apiKey) {
+            try {
+              if (process.platform === "win32" && existsSync(keyFile()))
+                secureWindowsFile(keyFile());
+              apiKey = readFileSync(keyFile(), "utf8").trim();
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           }
           if (!apiKey && process.platform === "darwin") {
             const result = await pi.exec("security", [
@@ -215,7 +233,6 @@ export default function (pi: ExtensionAPI) {
             ]);
             if (result.code === 0) apiKey = result.stdout.trim();
           }
-          apiKey ||= process.env.TYPESAFE_API_KEY?.trim();
           if (!apiKey) throw new Error("TypeSafe API key not found");
           client = new TypeSafeClient({ apiKey, timeout: 1500, retry: { maxRetries: 0 } });
         }

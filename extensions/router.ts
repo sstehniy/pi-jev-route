@@ -39,12 +39,12 @@ function secureWindowsFile(path: string) {
 $ErrorActionPreference = 'Stop'
 $path = $env:PI_JEV_KEY_FILE
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $path
+$acl = [System.IO.File]::GetAccessControl($path)
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }
 $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
-Set-Acl -LiteralPath $path -AclObject $acl
-$actual = Get-Acl -LiteralPath $path
+[System.IO.File]::SetAccessControl($path, $acl)
+$actual = [System.IO.File]::GetAccessControl($path)
 $rules = @($actual.Access)
 if (-not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or
     $rules[0].AccessControlType -ne 'Allow' -or

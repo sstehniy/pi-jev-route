@@ -264,7 +264,7 @@ test("Windows stores the key with an owner-only, non-inherited ACL", async () =>
   setup();
   await login();
   const script = `
-$acl = Get-Acl -LiteralPath $env:PI_JEV_KEY_FILE
+$acl = [System.IO.File]::GetAccessControl($env:PI_JEV_KEY_FILE)
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $rules = @($acl.Access)
 if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or

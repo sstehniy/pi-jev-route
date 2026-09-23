@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import router from "./extensions/router";
@@ -7,6 +7,9 @@ import router from "./extensions/router";
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.TYPESAFE_API_KEY;
 const originalPath = process.env.PATH;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalPlatform = process.platform;
+let agentDir: string;
 let loginHandler: any;
 let answer = "steer";
 let confidence = 0.9;
@@ -23,6 +26,8 @@ let sessionId: string;
 let restored: string[];
 
 beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), "pi-jev-agent-"));
+  process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.TYPESAFE_API_KEY = "test-key";
   answer = "steer";
   confidence = 0.9;
@@ -62,7 +67,11 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   process.env.PATH = originalPath;
+  process.platform = originalPlatform;
   delete process.env.KEYCHAIN_PROBE;
+  rmSync(agentDir, { recursive: true, force: true });
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   if (originalKey === undefined) delete process.env.TYPESAFE_API_KEY;
   else process.env.TYPESAFE_API_KEY = originalKey;
 });
@@ -108,42 +117,106 @@ function setup(task = "Implement the login form", updates: string[] = []) {
     );
 }
 
-test("/jev-login masks the key and saves it through stdin, not command arguments", async () => {
-  if (process.platform !== "darwin") return;
+async function login(confirm = false) {
+  await loginHandler("", {
+    mode: "tui",
+    ui: {
+      notify: (...args: any[]) => notified.push(args),
+      confirm: async () => confirm,
+      custom: async (factory: any) =>
+        new Promise((done) => {
+          const component = factory(
+            { requestRender() {} },
+            { fg: (_color: string, text: string) => text },
+            {},
+            done,
+          );
+          component.handleInput("dummy-private-key");
+          expect(component.render(80).join(" ")).not.toContain("dummy-private-key");
+          component.handleInput("\n");
+        }),
+    },
+  });
+}
+
+test("/jev-login saves a masked key to Keychain via Swift stdin, never in arguments", async () => {
+  if (originalPlatform === "win32") return;
+  process.platform = "darwin";
   setup();
   const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
+  const swift = join(dir, "swift");
   const file = join(dir, "captured");
-  const security = join(dir, "security");
   writeFileSync(
-    security,
-    "#!/usr/bin/python3\nimport os, sys\nopen(os.environ['KEYCHAIN_PROBE'], 'w').write('|'.join(sys.argv[1:]) + '\\n' + sys.stdin.read())\n",
+    swift,
+    '#!/bin/sh\nprintf "%s\\n" "$@" > "$KEYCHAIN_PROBE"\ncat >> "$KEYCHAIN_PROBE"\n',
   );
-  chmodSync(security, 0o700);
+  chmodSync(swift, 0o700);
   process.env.PATH = `${dir}:${originalPath}`;
   process.env.KEYCHAIN_PROBE = file;
   try {
-    await loginHandler("", {
-      mode: "tui",
-      ui: {
-        notify: (...args: any[]) => notified.push(args),
-        custom: async (factory: any) =>
-          new Promise((done) => {
-            const component = factory(
-              { requestRender() {} },
-              { fg: (_color: string, text: string) => text },
-              {},
-              done,
-            );
-            component.handleInput("dummy-private-key");
-            expect(component.render(80).join(" ")).not.toContain("dummy-private-key");
-            component.handleInput("\n");
-          }),
-      },
-    });
+    await login();
     const saved = readFileSync(file, "utf8");
     expect(saved.split("\n")[0]).not.toContain("dummy-private-key");
-    expect(saved).toEndWith("dummy-private-key\ndummy-private-key\n");
-    expect(notified.at(-1)?.[1]).toBe("info");
+    expect(saved).toContain("SecItemUpdate");
+    expect(saved).toContain("SecItemAdd");
+    expect(saved).toEndWith("dummy-private-key");
+    expect(notified.at(-1)).toEqual(["TypeSafe key saved to Keychain", "info"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saving to Keychain removes an earlier file so the new key takes effect", async () => {
+  if (originalPlatform === "win32") return;
+  process.platform = "darwin";
+  delete process.env.TYPESAFE_API_KEY;
+  setup();
+  const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
+  writeFileSync(join(dir, "swift"), "#!/bin/sh\ncat > /dev/null\n", { mode: 0o700 });
+  writeFileSync(join(agentDir, "pi-jev-route.key"), "old-file-key", { mode: 0o600 });
+  process.env.PATH = `${dir}:${originalPath}`;
+  try {
+    await login();
+    expect(() => readFileSync(join(agentDir, "pi-jev-route.key"))).toThrow();
+    expect(await setup()("Use passkeys")).toEqual({ action: "handled" });
+    expect(authorization).toBe("Bearer keychain-test-key");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("/jev-login stores a private file on platforms without Keychain", async () => {
+  process.platform = "linux";
+  delete process.env.TYPESAFE_API_KEY;
+  const input = setup();
+  await login();
+  const file = join(agentDir, "pi-jev-route.key");
+  expect(readFileSync(file, "utf8")).toBe("dummy-private-key");
+  expect(statSync(file).mode & 0o077).toBe(0);
+  expect(await input("Use passkeys")).toEqual({ action: "handled" });
+  expect(authorization).toBe("Bearer dummy-private-key");
+  await login();
+  expect(readFileSync(file, "utf8")).toBe("dummy-private-key");
+  expect(notified.at(-1)).toEqual(["TypeSafe key saved to private file", "info"]);
+});
+
+test("Keychain failure needs consent before using a plaintext file", async () => {
+  if (originalPlatform === "win32") return;
+  process.platform = "darwin";
+  delete process.env.TYPESAFE_API_KEY;
+  setup();
+  const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
+  writeFileSync(join(dir, "swift"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  process.env.PATH = `${dir}:${originalPath}`;
+  try {
+    await login();
+    expect(() => readFileSync(join(agentDir, "pi-jev-route.key"))).toThrow();
+    await login(true);
+    expect(readFileSync(join(agentDir, "pi-jev-route.key"), "utf8")).toBe("dummy-private-key");
+    expect(notified.at(-1)).toEqual(["TypeSafe key saved to private file", "info"]);
+    expect(await setup()("Use passkeys")).toEqual({ action: "handled" });
+    expect(authorization).toBe("Bearer dummy-private-key");
+    expect(keychainCalls).toHaveLength(0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -166,7 +239,7 @@ test("reroutes a correction to steer with its text intact", async () => {
   expect(requests).toHaveLength(1);
 });
 
-test("loads the key from macOS Keychain when no environment key exists", async () => {
+test("loads an existing macOS Keychain key when no file or environment key exists", async () => {
   if (process.platform !== "darwin") return;
   delete process.env.TYPESAFE_API_KEY;
   const input = setup();

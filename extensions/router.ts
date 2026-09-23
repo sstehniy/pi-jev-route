@@ -1,8 +1,11 @@
 import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { userInfo } from "node:os";
+import { join } from "node:path";
 
 const question = choice(
   "Should `new_prompt` be available to the agent before it finishes `current_task`, or only after it finishes? Judge intended timing, not whether the topics are related.",
@@ -29,6 +32,53 @@ const question = choice(
   },
 );
 
+const keyFile = () => join(getAgentDir(), "pi-jev-route.key");
+
+function saveFileKey(key: string) {
+  mkdirSync(getAgentDir(), { recursive: true, mode: 0o700 });
+  const temp = join(getAgentDir(), `.pi-jev-route-${randomUUID()}`);
+  try {
+    writeFileSync(temp, key, { flag: "wx", mode: 0o600 });
+    renameSync(temp, keyFile());
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+function saveKeychainKey(key: string): Promise<void> {
+  const program = `
+import Foundation
+import Security
+let query: [String: Any] = [
+  kSecClass as String: kSecClassGenericPassword,
+  kSecAttrAccount as String: CommandLine.arguments[1],
+  kSecAttrService as String: "pi-jev-router"
+]
+let data = FileHandle.standardInput.readDataToEndOfFile()
+guard !data.isEmpty else { exit(1) }
+let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+if status == errSecItemNotFound {
+  var item = query
+  item[kSecValueData as String] = data
+  guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { exit(1) }
+} else if status != errSecSuccess {
+  exit(1)
+}
+`;
+  return new Promise((resolve, reject) => {
+    const child = spawn("swift", ["-e", program, userInfo().username], {
+      stdio: ["pipe", "ignore", "ignore"],
+      signal: AbortSignal.timeout(30_000),
+    });
+    child.once("error", reject);
+    child.stdin.once("error", reject);
+    child.once("close", (code) =>
+      code === 0 ? resolve() : reject(new Error("Keychain save failed")),
+    );
+    child.stdin.end(key);
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   let client: TypeSafeClient | undefined;
   let pending = Promise.resolve();
@@ -51,10 +101,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("jev-login", {
-    description: "Save a TypeSafe API key in macOS Keychain",
+    description: "Save a TypeSafe API key for future sessions",
     handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui" || process.platform !== "darwin") {
-        ctx.ui.notify("/jev-login requires interactive Pi on macOS", "warning");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/jev-login requires interactive Pi", "warning");
         return;
       }
 
@@ -92,25 +142,28 @@ export default function (pi: ExtensionAPI) {
       if (!apiKey) return;
 
       try {
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn(
-            "security",
-            ["add-generic-password", "-U", "-a", userInfo().username, "-s", "pi-jev-router", "-w"],
-            {
-              stdio: ["pipe", "ignore", "ignore"],
-            },
-          );
-          child.once("error", reject);
-          child.stdin.once("error", reject);
-          child.once("close", (code) =>
-            code === 0 ? resolve() : reject(new Error("Keychain save failed")),
-          );
-          child.stdin.end(`${apiKey}\n${apiKey}\n`);
-        });
+        if (process.platform === "darwin") {
+          try {
+            await saveKeychainKey(apiKey);
+            rmSync(keyFile(), { force: true });
+            client = undefined;
+            ctx.ui.notify("TypeSafe key saved to Keychain", "info");
+            return;
+          } catch {
+            if (
+              !(await ctx.ui.confirm(
+                "Keychain unavailable",
+                "Save the key in a private file instead? It will not be protected by Keychain.",
+              ))
+            )
+              return;
+          }
+        }
+        saveFileKey(apiKey);
         client = undefined;
-        ctx.ui.notify("TypeSafe key saved to Keychain", "info");
+        ctx.ui.notify("TypeSafe key saved to private file", "info");
       } catch {
-        ctx.ui.notify("Could not save TypeSafe key to Keychain", "error");
+        ctx.ui.notify("Could not save TypeSafe key", "error");
       }
     },
   });
@@ -146,7 +199,12 @@ export default function (pi: ExtensionAPI) {
         if (restoreIfStale()) return { action: "handled" as const };
         if (!client) {
           let apiKey: string | undefined;
-          if (process.platform === "darwin") {
+          try {
+            apiKey = readFileSync(keyFile(), "utf8").trim();
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          if (!apiKey && process.platform === "darwin") {
             const result = await pi.exec("security", [
               "find-generic-password",
               "-a",

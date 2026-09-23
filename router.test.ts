@@ -279,7 +279,7 @@ if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or
       timeout: 10_000,
     },
   );
-  expect(result.status).toBe(0);
+  if (result.status !== 0) throw new Error(`Windows ACL check failed: ${result.stderr}`);
   const file = join(agentDir, "pi-jev-route.key");
   expect(readFileSync(file, "utf8")).toBe("dummy-private-key");
   expect(notified.at(-1)?.[1]).toBe("info");

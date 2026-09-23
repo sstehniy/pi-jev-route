@@ -41,11 +41,21 @@ beforeEach(() => {
     authorization = new Headers(options?.headers).get("authorization");
     requests.push(JSON.parse(String(options?.body)));
     if (fail) throw new Error("network unavailable");
-    return new Response(JSON.stringify({
-      model: "jev-1.13.0",
-      answers: { delivery: { type: "choice", choice: answer, confidence, probabilities: { steer: 0.95, followUp: 0.05 } } },
-      usage: { input_tokens: 1, output_tokens: 1 },
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        model: "jev-1.13.0",
+        answers: {
+          delivery: {
+            type: "choice",
+            choice: answer,
+            confidence,
+            probabilities: { steer: 0.95, followUp: 0.05 },
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   };
 });
 
@@ -60,17 +70,27 @@ afterEach(() => {
 function setup(task = "Implement the login form", updates: string[] = []) {
   const handlers: Record<string, any> = {};
   router({
-    registerCommand: (_name: string, command: any) => { loginHandler = command.handler; },
-    on: (type: string, handler: any) => { handlers[type] = handler; },
+    registerCommand: (_name: string, command: any) => {
+      loginHandler = command.handler;
+    },
+    on: (type: string, handler: any) => {
+      handlers[type] = handler;
+    },
     sendUserMessage: (...args: any[]) => sent.push(args),
     exec: async (...args: any[]) => {
       keychainCalls.push(args);
-      return { code: keychainCode, stdout: keychainCode === 0 ? "keychain-test-key\n" : "", stderr: "" };
+      return {
+        code: keychainCode,
+        stdout: keychainCode === 0 ? "keychain-test-key\n" : "",
+        stderr: "",
+      };
     },
   } as any);
   const ctx = {
     sessionManager: { getSessionId: () => sessionId },
-    get signal() { return activeRun.signal; },
+    get signal() {
+      return activeRun.signal;
+    },
     isIdle: () => idle,
     ui: {
       notify: (...args: any[]) => notified.push(args),
@@ -82,7 +102,10 @@ function setup(task = "Implement the login form", updates: string[] = []) {
     handlers.message_end({ message: { role: "user", content: [{ type: "text", text }] } }, ctx);
   }
   return (text: string, streamingBehavior: "steer" | "followUp" = "followUp", extra = {}) =>
-    handlers.input({ type: "input", text, streamingBehavior, source: "interactive", ...extra }, ctx);
+    handlers.input(
+      { type: "input", text, streamingBehavior, source: "interactive", ...extra },
+      ctx,
+    );
 }
 
 test("/jev-login masks the key and saves it through stdin, not command arguments", async () => {
@@ -91,7 +114,10 @@ test("/jev-login masks the key and saves it through stdin, not command arguments
   const dir = mkdtempSync(join(tmpdir(), "pi-jev-login-"));
   const file = join(dir, "captured");
   const security = join(dir, "security");
-  writeFileSync(security, "#!/usr/bin/python3\nimport os, sys\nopen(os.environ['KEYCHAIN_PROBE'], 'w').write('|'.join(sys.argv[1:]) + '\\n' + sys.stdin.read())\n");
+  writeFileSync(
+    security,
+    "#!/usr/bin/python3\nimport os, sys\nopen(os.environ['KEYCHAIN_PROBE'], 'w').write('|'.join(sys.argv[1:]) + '\\n' + sys.stdin.read())\n",
+  );
   chmodSync(security, 0o700);
   process.env.PATH = `${dir}:${originalPath}`;
   process.env.KEYCHAIN_PROBE = file;
@@ -100,12 +126,18 @@ test("/jev-login masks the key and saves it through stdin, not command arguments
       mode: "tui",
       ui: {
         notify: (...args: any[]) => notified.push(args),
-        custom: async (factory: any) => new Promise((done) => {
-          const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text }, {}, done);
-          component.handleInput("dummy-private-key");
-          expect(component.render(80).join(" ")).not.toContain("dummy-private-key");
-          component.handleInput("\n");
-        }),
+        custom: async (factory: any) =>
+          new Promise((done) => {
+            const component = factory(
+              { requestRender() {} },
+              { fg: (_color: string, text: string) => text },
+              {},
+              done,
+            );
+            component.handleInput("dummy-private-key");
+            expect(component.render(80).join(" ")).not.toContain("dummy-private-key");
+            component.handleInput("\n");
+          }),
       },
     });
     const saved = readFileSync(file, "utf8");
@@ -120,10 +152,17 @@ test("/jev-login masks the key and saves it through stdin, not command arguments
 test("reroutes a correction to steer with its text intact", async () => {
   const input = setup();
   expect(await input("Use passkeys, not passwords")).toEqual({ action: "handled" });
-  expect(sent).toEqual([["Use passkeys, not passwords", { deliverAs: "steer", expandPromptTemplates: true }]]);
-  expect(requests[0].state).toEqual({ current_task: "Implement the login form", new_prompt: "Use passkeys, not passwords" });
+  expect(sent).toEqual([
+    ["Use passkeys, not passwords", { deliverAs: "steer", expandPromptTemplates: true }],
+  ]);
+  expect(requests[0].state).toEqual({
+    current_task: "Implement the login form",
+    new_prompt: "Use passkeys, not passwords",
+  });
   expect(requests[0].questions.delivery.criteria).toHaveProperty("followUp");
-  expect(await input("Use passkeys, not passwords", "steer", { source: "extension" })).toEqual({ action: "continue" });
+  expect(await input("Use passkeys, not passwords", "steer", { source: "extension" })).toEqual({
+    action: "continue",
+  });
   expect(requests).toHaveLength(1);
 });
 
@@ -133,7 +172,9 @@ test("loads the key from macOS Keychain when no environment key exists", async (
   const input = setup();
   expect(await input("Use passkeys")).toEqual({ action: "handled" });
   expect(await input("Use passkeys again")).toEqual({ action: "handled" });
-  expect(keychainCalls).toEqual([["security", ["find-generic-password", "-a", process.env.USER, "-s", "pi-jev-router", "-w"]]]);
+  expect(keychainCalls).toEqual([
+    ["security", ["find-generic-password", "-a", process.env.USER, "-s", "pi-jev-router", "-w"]],
+  ]);
   expect(authorization).toBe("Bearer keychain-test-key");
 });
 
@@ -153,7 +194,9 @@ test("keeps the original delivery when the key is missing", async () => {
 
 test("keeps the original task when classifying after a steering correction", async () => {
   await setup("Implement the login form", ["Use passkeys instead of passwords"])("Also run tests");
-  expect(requests[0].state.current_task).toBe("Implement the login form\nUse passkeys instead of passwords");
+  expect(requests[0].state.current_task).toBe(
+    "Implement the login form\nUse passkeys instead of passwords",
+  );
 });
 
 test("restores an in-flight prompt after abort and restart", async () => {
@@ -161,8 +204,12 @@ test("restores an in-flight prompt after abort and restart", async () => {
   const original = globalThis.fetch;
   let release: () => void = () => {};
   let startedFetch: () => void = () => {};
-  const waiting = new Promise<void>((resolve) => { release = resolve; });
-  const started = new Promise<void>((resolve) => { startedFetch = resolve; });
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    startedFetch = resolve;
+  });
   globalThis.fetch = async (url, options) => {
     startedFetch();
     await waiting;
@@ -183,8 +230,12 @@ test("restores a prompt when Jev fails after abort and restart", async () => {
   const original = globalThis.fetch;
   let release: () => void = () => {};
   let startedFetch: () => void = () => {};
-  const waiting = new Promise<void>((resolve) => { release = resolve; });
-  const started = new Promise<void>((resolve) => { startedFetch = resolve; });
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    startedFetch = resolve;
+  });
   globalThis.fetch = async (url, options) => {
     startedFetch();
     await waiting;
@@ -220,11 +271,21 @@ test("does not steer a run that ended while Jev was answering", async () => {
   const input = setup();
   globalThis.fetch = async () => {
     idle = true;
-    return new Response(JSON.stringify({
-      model: "jev-1.13.0",
-      answers: { delivery: { type: "choice", choice: "steer", confidence: 0.9, probabilities: { steer: 0.95, followUp: 0.05 } } },
-      usage: { input_tokens: 1, output_tokens: 1 },
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        model: "jev-1.13.0",
+        answers: {
+          delivery: {
+            type: "choice",
+            choice: "steer",
+            confidence: 0.9,
+            probabilities: { steer: 0.95, followUp: 0.05 },
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   };
   expect(await input("Use passkeys")).toEqual({ action: "continue" });
   expect(sent).toHaveLength(0);
@@ -233,10 +294,13 @@ test("does not steer a run that ended while Jev was answering", async () => {
 test("routes rapid submissions in the order they were entered", async () => {
   const input = setup();
   let releaseFirst: () => void = () => {};
-  const firstRequest = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstRequest = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
-    if (JSON.parse(String(options?.body)).state.new_prompt === "First correction") await firstRequest;
+    if (JSON.parse(String(options?.body)).state.new_prompt === "First correction")
+      await firstRequest;
     return original(url, options);
   };
   const first = input("First correction");
@@ -248,7 +312,9 @@ test("routes rapid submissions in the order they were entered", async () => {
 
 test("keeps original delivery for images, missing context, and API errors", async () => {
   const input = setup();
-  expect(await input("Look at this", "followUp", { images: [{ type: "image" }] })).toEqual({ action: "continue" });
+  expect(await input("Look at this", "followUp", { images: [{ type: "image" }] })).toEqual({
+    action: "continue",
+  });
   expect(await setup("")("Change this")).toEqual({ action: "continue" });
   fail = true;
   expect(await input("Use passkeys")).toEqual({ action: "continue" });

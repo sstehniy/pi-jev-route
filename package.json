@@ -8,8 +8,18 @@
     "url": "git+https://github.com/sstehniy/pi-jev-route.git"
   },
   "homepage": "https://github.com/sstehniy/pi-jev-route#readme",
-  "keywords": ["pi-package", "pi-extension", "jev", "typesafe", "steering"],
-  "files": ["extensions/", "README.md", "LICENSE"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "jev",
+    "typesafe",
+    "steering"
+  ],
+  "files": [
+    "extensions/",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "pi": {
     "extensions": [
@@ -18,14 +28,19 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check ."
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",
-    "typescript": "^5.9.0"
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.2",

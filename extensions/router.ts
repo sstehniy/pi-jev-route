@@ -8,12 +8,23 @@ const question = choice(
   "Should `new_prompt` be available to the agent before it finishes `current_task`, or only after it finishes? Judge intended timing, not whether the topics are related.",
   {
     steer: {
-      meaning: "The agent must know this before finishing the current task: a correction, clarification, changed requirement, extra completion step, or request to stop an action.",
-      examples: ["Don't delete that file; edit it instead", "Use SQLite, not Postgres", "Also run tests before you finish", "Stop, that command is wrong"],
+      meaning:
+        "The agent must know this before finishing the current task: a correction, clarification, changed requirement, extra completion step, or request to stop an action.",
+      examples: [
+        "Don't delete that file; edit it instead",
+        "Use SQLite, not Postgres",
+        "Also run tests before you finish",
+        "Stop, that command is wrong",
+      ],
     },
     followUp: {
-      meaning: "The current task should finish first; the new request is a separate task to start afterward, not a requirement for completing current work.",
-      examples: ["After this, update the README", "Once you're done, review the changes", "Next, fix the login page"],
+      meaning:
+        "The current task should finish first; the new request is a separate task to start afterward, not a requirement for completing current work.",
+      examples: [
+        "After this, update the README",
+        "Once you're done, review the changes",
+        "Next, fix the login page",
+      ],
     },
   },
 );
@@ -23,11 +34,20 @@ export default function (pi: ExtensionAPI) {
   let pending = Promise.resolve();
   let taskPrompts: string[] = [];
 
-  pi.on("agent_start", () => { taskPrompts = []; });
+  pi.on("agent_start", () => {
+    taskPrompts = [];
+  });
   pi.on("message_end", (event) => {
     if (event.message.role !== "user") return;
     const content = event.message.content;
-    taskPrompts.push(typeof content === "string" ? content : content.filter((part) => part.type === "text").map((part) => part.text).join("\n"));
+    taskPrompts.push(
+      typeof content === "string"
+        ? content
+        : content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n"),
+    );
   });
 
   pi.registerCommand("jev-login", {
@@ -46,12 +66,19 @@ export default function (pi: ExtensionAPI) {
         };
         input.onEscape = () => done(undefined);
         return {
-          get focused() { return input.focused; },
-          set focused(value: boolean) { input.focused = value; },
+          get focused() {
+            return input.focused;
+          },
+          set focused(value: boolean) {
+            input.focused = value;
+          },
           render(width: number) {
             const masked = "•".repeat(Math.min(input.getValue().length, Math.max(0, width - 2)));
             return [
-              truncateToWidth(theme.fg("accent", "TypeSafe API key (Enter to save, Esc to cancel)"), width),
+              truncateToWidth(
+                theme.fg("accent", "TypeSafe API key (Enter to save, Esc to cancel)"),
+                width,
+              ),
               truncateToWidth(`${theme.fg("muted", masked)}${CURSOR_MARKER}`, width),
             ];
           },
@@ -66,12 +93,18 @@ export default function (pi: ExtensionAPI) {
 
       try {
         await new Promise<void>((resolve, reject) => {
-          const child = spawn("security", ["add-generic-password", "-U", "-a", userInfo().username, "-s", "pi-jev-router", "-w"], {
-            stdio: ["pipe", "ignore", "ignore"],
-          });
+          const child = spawn(
+            "security",
+            ["add-generic-password", "-U", "-a", userInfo().username, "-s", "pi-jev-router", "-w"],
+            {
+              stdio: ["pipe", "ignore", "ignore"],
+            },
+          );
           child.once("error", reject);
           child.stdin.once("error", reject);
-          child.once("close", (code) => code === 0 ? resolve() : reject(new Error("Keychain save failed")));
+          child.once("close", (code) =>
+            code === 0 ? resolve() : reject(new Error("Keychain save failed")),
+          );
           child.stdin.end(`${apiKey}\n${apiKey}\n`);
         });
         client = undefined;
@@ -99,7 +132,12 @@ export default function (pi: ExtensionAPI) {
 
     const route = pending.then(async () => {
       const restoreIfStale = () => {
-        if (!runSignal.aborted && ctx.sessionManager.getSessionId() === sessionId && (ctx.isIdle() || ctx.signal === runSignal)) return false;
+        if (
+          !runSignal.aborted &&
+          ctx.sessionManager.getSessionId() === sessionId &&
+          (ctx.isIdle() || ctx.signal === runSignal)
+        )
+          return false;
         ctx.ui.pasteToEditor(event.text);
         ctx.ui.notify("Task changed; prompt restored to editor", "warning");
         return true;
@@ -109,7 +147,14 @@ export default function (pi: ExtensionAPI) {
         if (!client) {
           let apiKey: string | undefined;
           if (process.platform === "darwin") {
-            const result = await pi.exec("security", ["find-generic-password", "-a", userInfo().username, "-s", "pi-jev-router", "-w"]);
+            const result = await pi.exec("security", [
+              "find-generic-password",
+              "-a",
+              userInfo().username,
+              "-s",
+              "pi-jev-router",
+              "-w",
+            ]);
             if (result.code === 0) apiKey = result.stdout.trim();
           }
           apiKey ||= process.env.TYPESAFE_API_KEY?.trim();
@@ -127,7 +172,10 @@ export default function (pi: ExtensionAPI) {
         }
 
         pi.sendUserMessage(event.text, { deliverAs: answer.choice, expandPromptTemplates: true });
-        ctx.ui.notify(answer.choice === "steer" ? "Sending as steer" : "Sending as follow-up", "info");
+        ctx.ui.notify(
+          answer.choice === "steer" ? "Sending as steer" : "Sending as follow-up",
+          "info",
+        );
         return { action: "handled" as const };
       } catch {
         if (restoreIfStale()) return { action: "handled" as const };
@@ -135,7 +183,10 @@ export default function (pi: ExtensionAPI) {
         return { action: "continue" as const };
       }
     });
-    pending = route.then(() => undefined, () => undefined);
+    pending = route.then(
+      () => undefined,
+      () => undefined,
+    );
     return route;
   });
 }

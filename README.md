@@ -24,6 +24,15 @@ bun install
 pi -e .
 bun test
 bun run typecheck
+bun run lint
+bun run format:check
+bun audit --audit-level=high
 ```
+
+## Releases
+
+Pull requests must pass formatting, linting, typechecking, tests, and a dependency security check. Dependabot opens dependency update PRs. Only a PR that changes `package.json`'s version triggers an npm publish after merging to `main`; other merges do not publish. To prepare a release, bump the version in a PR (for example, `npm version patch --no-git-tag-version`).
+
+For automatic publishing, the package owner must configure an [npm trusted publisher](https://docs.npmjs.com/trusted-publishers/) for GitHub Actions: user `sstehniy`, repository `pi-jev-route`, workflow `ci.yml`, allowed action `npm publish`, and no environment name. The workflow uses short-lived OIDC credentials; no npm token is stored in GitHub.
 
 The tests simulate TypeSafe replies without using your API key. Each live mid-run text prompt makes one Jev request. The classifier uses user instructions received during the active run; if that context is unavailable or too long, Pi retains your selected delivery mode. Pi's extension API does not confirm whether a rerouted message was enqueued: a rare asynchronous enqueue failure can still require you to resend it.

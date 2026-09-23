@@ -5,6 +5,12 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the current version after checking OIDC
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -46,7 +52,7 @@ jobs:
           fail-on-severity: high
 
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: check
     runs-on: ubuntu-latest
     permissions:
@@ -58,6 +64,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Check for a release version bump
+        if: github.event_name == 'push'
         id: version
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -68,15 +75,44 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.changed == 'true' || inputs.publish == true
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         with:
           node-version: "24"
           # Avoid setup-node's placeholder npm token, which can shadow OIDC publishing.
           package-manager-cache: false
+      - name: Check npm OIDC without publishing
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          node --input-type=module <<'NODE'
+          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+          url.searchParams.set('audience', 'npm:registry.npmjs.org');
+          const response = await fetch(url, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+          });
+          if (!response.ok) throw new Error(`GitHub OIDC request failed: ${response.status}`);
+          const { value: jwt } = await response.json();
+          if (!jwt) throw new Error('GitHub did not return an OIDC token');
+          const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
+          console.log('OIDC identity:', JSON.stringify(Object.fromEntries(
+            ['repository', 'repository_owner', 'workflow_ref', 'job_workflow_ref',
+              'environment', 'ref', 'event_name', 'aud'].map(key => [key, claims[key]]),
+          )));
+          const exchange = await fetch('https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/pi-jev-route', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${jwt}` },
+          });
+          if (!exchange.ok) {
+            const body = await exchange.json().catch(() => ({}));
+            console.error('npm OIDC exchange rejected:', exchange.status, String(body.message ?? body.error ?? '').slice(0, 300));
+            process.exitCode = 1;
+          } else {
+            console.log('npm OIDC exchange accepted');
+          }
+          NODE
       - name: Publish new version
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.changed == 'true' || inputs.publish == true
         run: |
           bun install --frozen-lockfile
           version=$(jq -r .version package.json)

@@ -73,7 +73,7 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          # Avoid setup-node's placeholder npm token, which can shadow OIDC publishing.
           package-manager-cache: false
       - name: Publish new version
         if: steps.version.outputs.changed == 'true'

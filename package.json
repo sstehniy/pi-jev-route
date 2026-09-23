@@ -1,6 +1,6 @@
 {
   "name": "pi-jev-route",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Route mid-run Pi prompts to steering or follow-up with TypeSafe Jev.",
   "license": "MIT",
   "repository": {
